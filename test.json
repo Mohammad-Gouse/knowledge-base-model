@@ -1,0 +1,6 @@
+{
+ "modelId": "mistral.mistral-7b-instruct-v0:2",
+ "contentType": "application/json",
+ "accept": "application/json",
+ "body": "{\"prompt\":\"<s>[INST] this is where you place your input text [/INST]\", \"max_tokens\":200, \"temperature\":0.5, \"top_p\":0.9, \"top_k\":50}"
+}

@@ -1,0 +1,6 @@
+boto3
+awscli
+chromadb
+sentence-transformers
+python-docx
+pymupdf
