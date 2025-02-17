@@ -1,33 +1,9 @@
-# from bedrock_client import ask_bedrock
-# from vector_store import store_documents,search_knowledge_base
-#
-# # Sample knowledge base
-# documents = [
-#     {"id": "1", "text": "AWS Lambda is a serverless computing service from Amazon Web Services."},
-#     {"id": "2", "text": "Amazon S3 is an object storage service that offers industry-leading scalability."},
-#     {"id": "3", "text": "Amazon Bedrock allows developers to build and scale AI models securely on AWS."},
-# ]
-#
-# # Store documents in vector database
-# store_documents(documents)
-#
-# # User query
-# query = "What is Amazon Bedrock?"
-# retrieved_text = search_knowledge_base(query)
-#
-# # Get AI-generated response
-# if retrieved_text:
-#     response = ask_bedrock(query, retrieved_text)
-#     print("\nAmazon Bedrock Response:", response)
-# else:
-#     print("No relevant data found.")
-
 # from vector_store import store_documents_from_word, store_documents_from_pdf, search_knowledge_base
 # from bedrock_client import ask_bedrock
 #
 # def store_by_document_type():
-#     doc_path = "../docs/"
-#     pdf_path = "../pdfs/"
+#     doc_path = "docs/"
+#     pdf_path = "pdfs/"
 #     doc_type = input("Enter Document type PDF or Word? [P/W]:")
 #     if doc_type.lower() == 'w' or doc_type.lower() == 'word':
 #         store_documents_from_word(doc_path)
@@ -78,6 +54,8 @@
 
 from fastapi import FastAPI
 from pydantic import BaseModel
+# from vector_store import search_knowledge_base
+# from bedrock_client import ask_bedrock
 from vector_store import search_knowledge_base
 from bedrock_client import ask_bedrock
 

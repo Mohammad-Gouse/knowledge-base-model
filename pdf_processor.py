@@ -10,7 +10,7 @@ def load_pdf_documents(folder_path):
     for filename in os.listdir(folder_path):
         if filename.endswith(".pdf"):
             file_path = os.path.join(folder_path, filename)
-            text = extract_text_from_pdf(file_path, f"../txts/{os.path.splitext(filename)[0]}")
+            text = extract_text_from_pdf(file_path, f"txts/{os.path.splitext(filename)[0]}")
             if text:
                 documents.append({"id": filename, "text": text})
     return documents
