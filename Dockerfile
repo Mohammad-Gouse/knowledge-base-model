@@ -7,10 +7,13 @@ WORKDIR /app
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install system dependencies and Python packages
+# Install system dependencies (Poppler, Tesseract-OCR) and Python packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get remove -y build-essential \
     && apt-get autoremove -y \
