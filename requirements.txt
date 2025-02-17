@@ -4,3 +4,9 @@ chromadb
 sentence-transformers
 python-docx
 pymupdf
+pdf2image
+pytesseract
+Pillow
+fastapi
+uvicorn
+pydantic

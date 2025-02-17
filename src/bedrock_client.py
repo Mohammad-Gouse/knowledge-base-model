@@ -3,7 +3,16 @@ from config import bedrock_runtime
 
 def ask_bedrock(query, context):
     """Uses Amazon Bedrock to generate an answer based on retrieved knowledge"""
-    prompt_data = f"Answer the following question based on the provided knowledge: {context} \n\n Question: {query}"
+    # prompt_data = f"Answer the following question based on the provided knowledge: {context} \n\n Question: {query}"
+    prompt_data = (
+        "You are an intelligent and friendly assistant. Answer the following question "
+        "in a conversational and natural tone based on the provided knowledge. "
+        "Keep your response engaging and easy to understand.\n\n"
+        "Context:\n"
+        f"{context}\n\n"
+        f"User question: {query}\n"
+    )
+
 
     payload = {
         "prompt": "<s>[INST]" + prompt_data + "[/INST]",

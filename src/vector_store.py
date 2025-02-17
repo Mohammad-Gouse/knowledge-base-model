@@ -26,7 +26,7 @@
 from sentence_transformers import SentenceTransformer
 from config import collection
 from doc_processor import load_documents
-from src.utils.pdf_processor import load_pdf_documents
+from pdf_processor import load_pdf_documents
 
 # Load the embedding model
 model = SentenceTransformer("all-MiniLM-L6-v2")

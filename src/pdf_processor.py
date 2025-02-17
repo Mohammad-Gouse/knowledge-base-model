@@ -1,6 +1,7 @@
 import os
 
-from src.utils.extract_text_pdf import extract_text_from_pdf
+# from extract_text_pdf import extract_text_from_pdf
+from extract_text_pdf import extract_text_from_pdf
 
 
 def load_pdf_documents(folder_path):
