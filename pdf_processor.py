@@ -1,6 +1,5 @@
 import os
 
-# from extract_text_pdf import extract_text_from_pdf
 from extract_text_pdf import extract_text_from_pdf
 
 

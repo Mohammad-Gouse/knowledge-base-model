@@ -1,0 +1,422 @@
+import boto3
+import chromadb
+import json
+import os
+import docx
+import pdf2image
+import pytesseract
+from PIL import Image
+from sentence_transformers import SentenceTransformer
+from fastapi import FastAPI
+from vector_store import search_knowledge_base
+from bedrock_client import ask_bedrock
+from pydantic import BaseModel
+import uvicorn
+
+
+# Initialize ChromaDB (Persistent storage)
+CHROMA_DB_PATH = "embeddings"
+client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+collection = client.get_or_create_collection(name="knowledge_base")
+
+# Initialize Amazon Bedrock Client
+AWS_REGION = "ap-south-1"
+bedrock_runtime = boto3.client(service_name="bedrock-runtime", region_name=AWS_REGION)
+
+
+
+def ask_bedrock(query, context):
+    """Uses Amazon Bedrock to generate an answer based on retrieved knowledge"""
+    # prompt_data = f"Answer the following question based on the provided knowledge: {context} \n\n Question: {query}"
+    prompt_data = (
+        "You are an intelligent and friendly assistant. Answer the following question "
+        "in a conversational and natural tone based on the provided knowledge. "
+        "Keep your response engaging and easy to understand.\n\n"
+        "Context:\n"
+        f"{context}\n\n"
+        f"User question: {query}\n"
+    )
+
+
+    payload = {
+        "prompt": "<s>[INST]" + prompt_data + "[/INST]",
+        "max_tokens": 200,
+        "temperature": 0.5,
+        "top_p": 0.9,
+        "top_k": 50
+    }
+
+    body = json.dumps(payload)
+    model_id = "mistral.mistral-7b-instruct-v0:2"
+    respone = bedrock_runtime.invoke_model(
+        modelId=model_id,
+        contentType="application/json",
+        accept="application/json",
+        body=body
+    )
+    response_body = json.loads(respone.get("body").read())
+    return response_body
+
+
+
+def extract_text_from_docx(doc_path):
+    """Extracts text from a Word document."""
+    doc = docx.Document(doc_path)
+    return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+
+def load_documents(folder_path):
+    """Loads all Word documents from a folder and extracts text."""
+    documents = []
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".docx"):
+            file_path = os.path.join(folder_path, filename)
+            text = extract_text_from_docx(file_path)
+            if text:
+                documents.append({"id": filename, "text": text})
+    return documents
+
+
+
+
+def extract_text_from_pdf(pdf_path, output_txt_path):
+    """
+    Extract text from a PDF containing scanned images using OCR.
+
+    Args:
+        pdf_path (str): Path to the input PDF file
+        output_txt_path (str): Path where the extracted text will be saved
+    """
+    try:
+        # Convert PDF to images
+        # print("Converting PDF to images...")
+        pages = pdf2image.convert_from_path(pdf_path)
+
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_txt_path), exist_ok=True)
+
+        # Process each page
+        all_text = []
+        for i, page in enumerate(pages):
+            print(f"Processing page {i + 1}/{len(pages)}...")
+
+            # Improve image quality for better OCR results
+            page = page.convert('L')  # Convert to grayscale
+
+            # Optional: Improve image quality
+            # page = page.point(lambda x: 0 if x < 128 else 255, '1')  # Increase contrast
+
+            # Perform OCR
+            text = pytesseract.image_to_string(page, lang='eng')
+            all_text.append(text)
+
+            # Optional: Save individual page text
+            with open(f"{output_txt_path}_page_{i + 1}.txt", 'w', encoding='utf-8') as f:
+                f.write(text)
+
+        # Save all text to a single file
+        with open(f"{output_txt_path}.txt", 'w', encoding='utf-8') as f:
+            f.write('\n\n'.join(all_text))
+
+        print(f"Text extraction complete. Output saved to {output_txt_path}")
+        return '\n\n'.join(all_text)
+
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+
+
+def preprocess_image(image):
+    """
+    Preprocess image to improve OCR accuracy.
+
+    Args:
+        image (PIL.Image): Input image
+    Returns:
+        PIL.Image: Processed image
+    """
+    # Convert to grayscale
+    image = image.convert('L')
+
+    # Increase contrast
+    # image = image.point(lambda x: 0 if x < 128 else 255, '1')
+
+    return image
+
+
+def load_pdf_documents(folder_path):
+    """Loads all Word documents from a folder and extracts text."""
+    documents = []
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".pdf"):
+            file_path = os.path.join(folder_path, filename)
+            text = extract_text_from_pdf(file_path, f"txts/{os.path.splitext(filename)[0]}")
+            if text:
+                documents.append({"id": filename, "text": text})
+    return documents
+
+
+# Load the embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def chunk_text(text, chunk_size=500, overlap=100):
+    """Splits text into overlapping chunks for better retrieval."""
+    chunks = []
+    words = text.split()  # Split by words to avoid breaking words
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
+
+def store_documents_from_word(doc_path):
+    """Extracts text from Word docs, chunks it, converts to vectors, and stores in ChromaDB."""
+    documents = load_documents(doc_path)  # Load Word documents
+
+    for doc in documents:
+        print("Chunking in progress...")
+        text_chunks = chunk_text(doc["text"])  # Break document into smaller pieces
+
+        for idx, chunk in enumerate(text_chunks):
+            embedding = model.encode(chunk).tolist()
+            chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
+            collection.add(
+                ids=[chunk_id],
+                embeddings=[embedding],
+                metadatas=[{"text": chunk}]
+            )
+
+    print("Word document stored in ChromaDB ✅")
+
+def store_documents_from_pdf(pdf_path):
+    """Extracts text from pdf docs, chunks it, converts to vectors, and stores in ChromaDB."""
+    documents = load_pdf_documents(pdf_path)  # Load Word documents
+
+    for doc in documents:
+        text_chunks = chunk_text(doc["text"])  # Break document into smaller pieces
+
+        for idx, chunk in enumerate(text_chunks):
+            embedding = model.encode(chunk).tolist()
+            chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
+            collection.add(
+                ids=[chunk_id],
+                embeddings=[embedding],
+                metadatas=[{"text": chunk}]
+            )
+
+    print("PDF document stored in ChromaDB ✅")
+
+def search_knowledge_base(query, top_k=3):
+    """Searches ChromaDB and returns the most relevant text chunks."""
+    query_embedding = model.encode([query]).tolist()
+
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=top_k,
+        include=["metadatas"]
+    )
+
+    # print(len(results['metadatas'][0]))
+
+    retrieved_texts = [item["text"] for item in results["metadatas"][0]] if results["metadatas"] else []
+
+    return "\n".join(retrieved_texts) if retrieved_texts else None
+
+
+
+def store_by_document_type():
+    doc_path = "docs/"
+    pdf_path = "pdfs/"
+    doc_type = input("Enter Document type PDF or Word? [P/W]:")
+    if doc_type.lower() == 'w' or doc_type.lower() == 'word':
+        store_documents_from_word(doc_path)
+    elif doc_type.lower() == 'p' or doc_type.lower() == 'pdf':
+        store_documents_from_pdf(pdf_path)
+    else:
+        try_again = input("Invalid input. Do you want to try again?[Y/N]:")
+        if try_again.lower() == 'y' or try_again.lower() == 'yes':
+            store_by_document_type()
+        else:
+            return
+
+    more_doc = input("Do you want to store more documents? [Y/N]:")
+    if more_doc.lower() == 'y' or more_doc.lower() == 'yes':
+        store_by_document_type()
+
+def store_documents():
+    # Step 1: Store documents in ChromaDB
+    store_doc = input("Do you want to store documents? [Y/N]:")
+    if store_doc.lower() == 'y' or store_doc.lower() == 'yes':
+        store_by_document_type()
+
+def search_user_query(query):
+    #Query Examples:
+    # query = "What is the setup cost for this mandate?"
+    # query = "What is name of client and his pan number and his address, also on which date this mandate was signed?"
+    # query1 = "how many Required fields that will be fetched from Caliber during integration of non functional requirements?"
+    # query2 = "How to set up family trust?"
+
+    # while True:
+    #     query = input("\nEnter your query:").strip()
+    #     if query == "-1":
+    #         break
+    #     retrieved_text = search_knowledge_base(query)
+    #     if retrieved_text:
+    #         response = ask_bedrock(query, retrieved_text)
+    #         print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
+    #     else:
+    #         print("No relevant data found.")
+    retrieved_text = search_knowledge_base(query)
+    if retrieved_text:
+        response = ask_bedrock(query, retrieved_text)
+        print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
+        return response['outputs'][0]['text']
+    else:
+        print("No relevant data found.")
+        return None
+
+
+
+app = FastAPI()
+
+class QueryRequest(BaseModel):
+    query: str
+
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from typing import Dict, Optional, List
+
+
+async def process_document(file: UploadFile) -> Dict:
+    """Process uploaded document and store in ChromaDB."""
+
+    # Define the temporary directory and ensure it exists
+    TEMP_DIR = "/tmp"
+    os.makedirs(TEMP_DIR, exist_ok=True)  # ✅ Create /tmp/ if it doesn't exist
+
+    # Define the temporary file path
+    temp_path = os.path.join(TEMP_DIR, file.filename)
+
+    try:
+        # Save the uploaded file
+        content = await file.read()
+        with open(temp_path, "wb") as temp_file:
+            temp_file.write(content)
+
+        # Debugging - Check if the file exists
+        if not os.path.exists(temp_path):
+            raise HTTPException(status_code=500, detail=f"File not found: {temp_path}")
+
+        # Extract text based on file type
+        if file.filename.lower().endswith('.pdf'):
+            text = extract_text_from_pdf(temp_path, f"/tmp/{os.path.splitext(file.filename)[0]}")
+        elif file.filename.lower().endswith('.docx'):
+            text = extract_text_from_docx(temp_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file.filename}")
+
+        # Chunk and store in ChromaDB
+        text_chunks = chunk_text(text)
+        for idx, chunk in enumerate(text_chunks):
+            embedding = model.encode(chunk).tolist()
+            chunk_id = f"{file.filename}_{idx}"
+            collection.add(
+                ids=[chunk_id],
+                embeddings=[embedding],
+                metadatas=[{"text": chunk, "source": file.filename}]
+            )
+
+        return {"message": f"File {file.filename} saved successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # Cleanup - Delete file after processing
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+# async def process_document(file: UploadFile) -> Dict:
+#     """Process uploaded document and store in ChromaDB."""
+#     temp_path = f"/tmp/{file.filename}"
+#     try:
+#         # Save uploaded file temporarily
+#         with open(temp_path, "wb") as temp_file:
+#             content = await file.read()
+#             temp_file.write(content)
+#
+#         # Extract text based on file type
+#         if file.filename.lower().endswith('.pdf'):
+#             text = extract_text_from_pdf(temp_path, f"/tmp/{os.path.splitext(file.filename)[0]}")
+#         elif file.filename.lower().endswith('.docx'):
+#             text = extract_text_from_docx(temp_path)
+#         else:
+#             raise ValueError(f"Unsupported file type: {file.filename}")
+#
+#         # Chunk and store in ChromaDB
+#         text_chunks = chunk_text(text)
+#         for idx, chunk in enumerate(text_chunks):
+#             embedding = model.encode(chunk).tolist()
+#             chunk_id = f"{file.filename}_{idx}"
+#             collection.add(
+#                 ids=[chunk_id],
+#                 embeddings=[embedding],
+#                 metadatas=[{"text": chunk, "source": file.filename}]
+#             )
+#
+#         # Upload to S3 if configured
+#         # if S3_BUCKET:
+#         #     s3_client.upload_file(temp_path, S3_BUCKET, file.filename)
+#
+#         return {"message": f"Successfully processed {file.filename}", "chunks": len(text_chunks)}
+#
+#     finally:
+#         if os.path.exists(temp_path):
+#             os.remove(temp_path)
+
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Endpoint to upload and process documents."""
+    try:
+        result = await process_document(file)
+        return result
+    except Exception as e:
+        # logger.error(f"Error processing document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/search")
+async def search_knowledge(request: QueryRequest):
+    """API to query the knowledge base and get responses."""
+    query = request.query
+    retrieved_text = search_knowledge_base(query)
+
+    if not retrieved_text:
+        return {"response": "No relevant data found"}
+
+    response = ask_bedrock(query, retrieved_text)
+    return {"response": response['outputs'][0]['text']}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# def lambda_handler(event, context):
+#     """
+#     AWS Lambda entry point.
+#     Expects a JSON event with a "query" key.
+#     """
+#     try:
+#         # Extract query from the event
+#         user_query = event.get("query", "No query provided")
+#
+#         # Process the query
+#         response_message = search_user_query(user_query)
+#
+#         return {
+#             "statusCode": 200,
+#             "body": json.dumps({"response": response_message})
+#         }
+#     except Exception as e:
+#         return {
+#             "statusCode": 500,
+#             "body": json.dumps({"error": str(e)})
+#         }
