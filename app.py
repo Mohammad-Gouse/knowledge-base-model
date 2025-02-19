@@ -24,7 +24,6 @@ AWS_REGION = "ap-south-1"
 bedrock_runtime = boto3.client(service_name="bedrock-runtime", region_name=AWS_REGION)
 
 
-
 def ask_bedrock(query, context):
     """Uses Amazon Bedrock to generate an answer based on retrieved knowledge"""
     # prompt_data = f"Answer the following question based on the provided knowledge: {context} \n\n Question: {query}"
@@ -37,13 +36,12 @@ def ask_bedrock(query, context):
         f"User question: {query}\n"
     )
 
-
     payload = {
         "prompt": "<s>[INST]" + prompt_data + "[/INST]",
         "max_tokens": 200,
         "temperature": 0.5,
         "top_p": 0.9,
-        "top_k": 50
+        "top_k": 50,
     }
 
     body = json.dumps(payload)
@@ -52,17 +50,17 @@ def ask_bedrock(query, context):
         modelId=model_id,
         contentType="application/json",
         accept="application/json",
-        body=body
+        body=body,
     )
     response_body = json.loads(respone.get("body").read())
     return response_body
-
 
 
 def extract_text_from_docx(doc_path):
     """Extracts text from a Word document."""
     doc = docx.Document(doc_path)
     return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+
 
 def load_documents(folder_path):
     """Loads all Word documents from a folder and extracts text."""
@@ -74,8 +72,6 @@ def load_documents(folder_path):
             if text:
                 documents.append({"id": filename, "text": text})
     return documents
-
-
 
 
 def extract_text_from_pdf(pdf_path, output_txt_path):
@@ -100,25 +96,27 @@ def extract_text_from_pdf(pdf_path, output_txt_path):
             print(f"Processing page {i + 1}/{len(pages)}...")
 
             # Improve image quality for better OCR results
-            page = page.convert('L')  # Convert to grayscale
+            page = page.convert("L")  # Convert to grayscale
 
             # Optional: Improve image quality
             # page = page.point(lambda x: 0 if x < 128 else 255, '1')  # Increase contrast
 
             # Perform OCR
-            text = pytesseract.image_to_string(page, lang='eng')
+            text = pytesseract.image_to_string(page, lang="eng")
             all_text.append(text)
 
             # Optional: Save individual page text
-            with open(f"{output_txt_path}_page_{i + 1}.txt", 'w', encoding='utf-8') as f:
+            with open(
+                f"{output_txt_path}_page_{i + 1}.txt", "w", encoding="utf-8"
+            ) as f:
                 f.write(text)
 
         # Save all text to a single file
-        with open(f"{output_txt_path}.txt", 'w', encoding='utf-8') as f:
-            f.write('\n\n'.join(all_text))
+        with open(f"{output_txt_path}.txt", "w", encoding="utf-8") as f:
+            f.write("\n\n".join(all_text))
 
         print(f"Text extraction complete. Output saved to {output_txt_path}")
-        return '\n\n'.join(all_text)
+        return "\n\n".join(all_text)
 
     except Exception as e:
         print(f"An error occurred: {str(e)}")
@@ -134,7 +132,7 @@ def preprocess_image(image):
         PIL.Image: Processed image
     """
     # Convert to grayscale
-    image = image.convert('L')
+    image = image.convert("L")
 
     # Increase contrast
     # image = image.point(lambda x: 0 if x < 128 else 255, '1')
@@ -148,7 +146,9 @@ def load_pdf_documents(folder_path):
     for filename in os.listdir(folder_path):
         if filename.endswith(".pdf"):
             file_path = os.path.join(folder_path, filename)
-            text = extract_text_from_pdf(file_path, f"txts/{os.path.splitext(filename)[0]}")
+            text = extract_text_from_pdf(
+                file_path, f"txts/{os.path.splitext(filename)[0]}"
+            )
             if text:
                 documents.append({"id": filename, "text": text})
     return documents
@@ -163,7 +163,7 @@ def chunk_text(text, chunk_size=500, overlap=100):
     chunks = []
     words = text.split()  # Split by words to avoid breaking words
     for i in range(0, len(words), chunk_size - overlap):
-        chunk = " ".join(words[i:i + chunk_size])
+        chunk = " ".join(words[i : i + chunk_size])
         chunks.append(chunk)
     return chunks
 
@@ -180,12 +180,11 @@ def store_documents_from_word(doc_path):
             embedding = model.encode(chunk).tolist()
             chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
             collection.add(
-                ids=[chunk_id],
-                embeddings=[embedding],
-                metadatas=[{"text": chunk}]
+                ids=[chunk_id], embeddings=[embedding], metadatas=[{"text": chunk}]
             )
 
     print("Word document stored in ChromaDB ✅")
+
 
 def store_documents_from_pdf(pdf_path):
     """Extracts text from pdf docs, chunks it, converts to vectors, and stores in ChromaDB."""
@@ -198,58 +197,60 @@ def store_documents_from_pdf(pdf_path):
             embedding = model.encode(chunk).tolist()
             chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
             collection.add(
-                ids=[chunk_id],
-                embeddings=[embedding],
-                metadatas=[{"text": chunk}]
+                ids=[chunk_id], embeddings=[embedding], metadatas=[{"text": chunk}]
             )
 
     print("PDF document stored in ChromaDB ✅")
+
 
 def search_knowledge_base(query, top_k=3):
     """Searches ChromaDB and returns the most relevant text chunks."""
     query_embedding = model.encode([query]).tolist()
 
     results = collection.query(
-        query_embeddings=query_embedding,
-        n_results=top_k,
-        include=["metadatas"]
+        query_embeddings=query_embedding, n_results=top_k, include=["metadatas"]
     )
 
     # print(len(results['metadatas'][0]))
 
-    retrieved_texts = [item["text"] for item in results["metadatas"][0]] if results["metadatas"] else []
+    retrieved_texts = (
+        [item["text"] for item in results["metadatas"][0]]
+        if results["metadatas"]
+        else []
+    )
 
     return "\n".join(retrieved_texts) if retrieved_texts else None
-
 
 
 def store_by_document_type():
     doc_path = "docs/"
     pdf_path = "pdfs/"
     doc_type = input("Enter Document type PDF or Word? [P/W]:")
-    if doc_type.lower() == 'w' or doc_type.lower() == 'word':
+    if doc_type.lower() == "w" or doc_type.lower() == "word":
         store_documents_from_word(doc_path)
-    elif doc_type.lower() == 'p' or doc_type.lower() == 'pdf':
+    elif doc_type.lower() == "p" or doc_type.lower() == "pdf":
         store_documents_from_pdf(pdf_path)
     else:
         try_again = input("Invalid input. Do you want to try again?[Y/N]:")
-        if try_again.lower() == 'y' or try_again.lower() == 'yes':
+        if try_again.lower() == "y" or try_again.lower() == "yes":
             store_by_document_type()
         else:
             return
 
     more_doc = input("Do you want to store more documents? [Y/N]:")
-    if more_doc.lower() == 'y' or more_doc.lower() == 'yes':
+    if more_doc.lower() == "y" or more_doc.lower() == "yes":
         store_by_document_type()
+
 
 def store_documents():
     # Step 1: Store documents in ChromaDB
     store_doc = input("Do you want to store documents? [Y/N]:")
-    if store_doc.lower() == 'y' or store_doc.lower() == 'yes':
+    if store_doc.lower() == "y" or store_doc.lower() == "yes":
         store_by_document_type()
 
+
 def search_user_query(query):
-    #Query Examples:
+    # Query Examples:
     # query = "What is the setup cost for this mandate?"
     # query = "What is name of client and his pan number and his address, also on which date this mandate was signed?"
     # query1 = "how many Required fields that will be fetched from Caliber during integration of non functional requirements?"
@@ -269,17 +270,18 @@ def search_user_query(query):
     if retrieved_text:
         response = ask_bedrock(query, retrieved_text)
         print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
-        return response['outputs'][0]['text']
+        return response["outputs"][0]["text"]
     else:
         print("No relevant data found.")
         return None
 
 
-
 app = FastAPI()
+
 
 class QueryRequest(BaseModel):
     query: str
+
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from typing import Dict, Optional, List
@@ -306,9 +308,11 @@ async def process_document(file: UploadFile) -> Dict:
             raise HTTPException(status_code=500, detail=f"File not found: {temp_path}")
 
         # Extract text based on file type
-        if file.filename.lower().endswith('.pdf'):
-            text = extract_text_from_pdf(temp_path, f"/tmp/{os.path.splitext(file.filename)[0]}")
-        elif file.filename.lower().endswith('.docx'):
+        if file.filename.lower().endswith(".pdf"):
+            text = extract_text_from_pdf(
+                temp_path, f"/tmp/{os.path.splitext(file.filename)[0]}"
+            )
+        elif file.filename.lower().endswith(".docx"):
             text = extract_text_from_docx(temp_path)
         else:
             raise ValueError(f"Unsupported file type: {file.filename}")
@@ -321,7 +325,7 @@ async def process_document(file: UploadFile) -> Dict:
             collection.add(
                 ids=[chunk_id],
                 embeddings=[embedding],
-                metadatas=[{"text": chunk, "source": file.filename}]
+                metadatas=[{"text": chunk, "source": file.filename}],
             )
 
         return {"message": f"File {file.filename} saved successfully"}
@@ -333,6 +337,7 @@ async def process_document(file: UploadFile) -> Dict:
         # Cleanup - Delete file after processing
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
 
 # async def process_document(file: UploadFile) -> Dict:
 #     """Process uploaded document and store in ChromaDB."""
@@ -372,6 +377,7 @@ async def process_document(file: UploadFile) -> Dict:
 #         if os.path.exists(temp_path):
 #             os.remove(temp_path)
 
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     """Endpoint to upload and process documents."""
@@ -381,6 +387,7 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         # logger.error(f"Error processing document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/search")
 async def search_knowledge(request: QueryRequest):
@@ -392,78 +399,158 @@ async def search_knowledge(request: QueryRequest):
         return {"response": "No relevant data found"}
 
     response = ask_bedrock(query, retrieved_text)
-    return {"response": response['outputs'][0]['text']}
+    return {"response": response["outputs"][0]["text"]}
 
 
 # In-memory cache to track processed messages (Prevent duplicates)
 processed_messages = set()
+import httpx
 
 
 @app.get("/")
 def home():
-    return {"message": "WhatsApp Webhook Running!"}
+    return {"message": "WhatsApp Webhook Running!..."}
+
+
+# @app.get("/webhook")
+# async def verify_webhook(hub_mode: str, hub_verify_token: str, hub_challenge: str):
+#     """WhatsApp Webhook Verification"""
+#     VERIFY_TOKEN = "jyoti"  # Set your verification token
+
+#     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+#         print("Webhook verified successfully.")
+#         return int(hub_challenge)  # WhatsApp requires plain text response
+#     else:
+#         print("Webhook verification failed.")
+#         raise HTTPException(status_code=403, detail="Forbidden")
+
+MY_TOKEN = "jyoti"  # Replace with your actual token
 
 
 @app.get("/webhook")
-async def verify_webhook(hub_mode: str, hub_verify_token: str, hub_challenge: str):
-    """WhatsApp Webhook Verification"""
-    VERIFY_TOKEN = "my_secret_token"  # Set your verification token
+async def webhook(request: Request):
+    query_params = request.query_params
+    mode = query_params.get("hub.mode")
+    challenge = query_params.get("hub.challenge")
+    token = query_params.get("hub.verify_token")
 
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        print("Webhook verified successfully.")
-        return int(hub_challenge)  # WhatsApp requires plain text response
-    else:
-        print("Webhook verification failed.")
-        raise HTTPException(status_code=403, detail="Forbidden")
+    print(token)
+    print(mode)
+    print(challenge)
+
+    if mode and token:
+        if mode == "subscribe" and token == MY_TOKEN:
+            print("passed")
+            return int(challenge)  # FastAPI automatically sets 200 status
+        else:
+            print("failed")
+            return {"error": "Forbidden"}, 403
+    # return {"error": "Invalid request"}, 400
 
 
 @app.post("/webhook")
-async def receive_message(request: Request):
-    """Processes incoming messages from WhatsApp"""
-    global processed_messages
+async def webhook(request: Request):
+    body_param = await request.json()
+    access_token = "EAAWA3MqEIZBMBO2jAXsVW1fWrBq6o0NZBjybzl6nGYnwl9VkEbRa3MWIQgQjFqZBwJRtkdUOt0Bq2V4ADQzT1RotjM24xTNiAzlartIlH2ftPkKqNf57b3oyfl5aBhRiGhzZBNbiBCIhOKZAZAbJXz6K0ao9D3rLWPvKgvIkZBHKvKvsSWESKK3z5hDFUdMJPnZAUa09EswpBqNKvZBcuzo9QklRUXQZB2DriZBf5myRUGx"
 
-    try:
-        body = await request.json()
-        print("Received Webhook:", json.dumps(body, indent=2))
+    if body_param.get("object"):
+        try:
+            entry = body_param.get("entry", [])[0]
+            changes = entry.get("changes", [])[0]
+            value = changes.get("value", {})
+            messages = value.get("messages", [])
 
-        # Basic validation
-        if "object" not in body:
-            raise HTTPException(status_code=400, detail="Invalid event.")
+            if messages:
+                phon_no_id = value["metadata"]["phone_number_id"]
+                from_ = messages[0]["from"]
+                msg_body = messages[0]["text"]["body"]
+                user_name = (
+                    value.get("contacts", [{}])[0]
+                    .get("profile", {})
+                    .get("name", "User")
+                )
 
-        entry = body.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
-        messages = value.get("messages", [{}])[0]
+                print("body_param:", body_param)
+                print({"from": from_})
+                print({"msg_body": msg_body})
+                answer = search_user_query(msg_body)
 
-        if not messages:
-            raise HTTPException(status_code=400, detail="No message found.")
+                # Making the API call to WhatsApp Business API
+                url = f"https://graph.facebook.com/v21.0/{phon_no_id}/messages?access_token={access_token}"
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": "8692809476",
+                    "type": "text",
+                    "text": {"body": f"{answer}"},
+                }
+                headers = {"Content-Type": "application/json"}
 
-        message_id = messages.get("id")  # Unique ID
-        phone_number_id = value.get("metadata", {}).get("phone_number_id")
-        from_user = messages.get("from")
-        msg_body = messages.get("text", {}).get("body", "")
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, headers=headers)
 
-        print(f"Received Message ID: {message_id}")
+                    if response.status_code == 200:
+                        print("Message sent successfully:", response.json())
+                        return {"message": "Message sent successfully"}
+                    else:
+                        print("Error sending message:", response.json())
+                        return {
+                            "error": "Failed to send message.",
+                            "details": response.json(),
+                        }, 400
+        except Exception as e:
+            print("Unexpected error:", str(e))
+            return {"error": "An unexpected error occurred.", "details": str(e)}, 500
+    return {"error": "Invalid request"}, 404
 
-        # **Deduplication Check**
-        if message_id in processed_messages:
-            print("⚠️ Duplicate message detected. Skipping processing.")
-            return {"message": "Message already processed."}
 
-        # **Store Message ID to Prevent Future Duplicates**
-        processed_messages.add(message_id)
+# @app.post("/webhook")
+# async def receive_message(request: Request):
+#     """Processes incoming messages from WhatsApp"""
+#     global processed_messages
 
-        # **Invoke Lambda for Response**
-        response_text = get_auto_response(msg_body, body)
+#     try:
+#         body = await request.json()
+#         print("Received Webhook:", json.dumps(body, indent=2))
 
-        # **Send Response to WhatsApp**
-        send_whatsapp_message(phone_number_id, from_user, response_text)
+#         # Basic validation
+#         if "object" not in body:
+#             raise HTTPException(status_code=400, detail="Invalid event.")
 
-        return {"message": "Processed successfully"}
+#         entry = body.get("entry", [{}])[0]
+#         changes = entry.get("changes", [{}])[0]
+#         value = changes.get("value", {})
+#         messages = value.get("messages", [{}])[0]
 
-    except Exception as error:
-        print("Error handling request:", error)
-        raise HTTPException(status_code=500, detail=str(error))
+#         if not messages:
+#             raise HTTPException(status_code=400, detail="No message found.")
+
+#         message_id = messages.get("id")  # Unique ID
+#         phone_number_id = value.get("metadata", {}).get("phone_number_id")
+#         from_user = messages.get("from")
+#         msg_body = messages.get("text", {}).get("body", "")
+
+#         print(f"Received Message ID: {message_id}")
+
+#         # **Deduplication Check**
+#         if message_id in processed_messages:
+#             print("⚠️ Duplicate message detected. Skipping processing.")
+#             return {"message": "Message already processed."}
+
+#         # **Store Message ID to Prevent Future Duplicates**
+#         processed_messages.add(message_id)
+
+#         # **Invoke Lambda for Response**
+#         response_text = get_auto_response(msg_body, body)
+
+#         # **Send Response to WhatsApp**
+#         send_whatsapp_message(phone_number_id, from_user, response_text)
+
+#         return {"message": "Processed successfully"}
+
+#     except Exception as error:
+#         print("Error handling request:", error)
+#         raise HTTPException(status_code=500, detail=str(error))
 
 
 def get_auto_response(user_message, body_param):
