@@ -7,7 +7,8 @@ import pdf2image
 import pytesseract
 from PIL import Image
 from sentence_transformers import SentenceTransformer
-from vector_store import search_knowledge_base
+
+# from vector_store import search_knowledge_base
 from bedrock_client import ask_bedrock
 from pydantic import BaseModel
 import uvicorn
@@ -46,11 +47,13 @@ def ask_bedrock(query, context):
 
     payload = {
         "prompt": "<s>[INST]" + prompt_data + "[/INST]",
-        "max_tokens": 200,
-        "temperature": 0.5,
-        "top_p": 0.9,
-        "top_k": 50,
+        "max_tokens": int(os.getenv("MAX_TOKENS", 300)),
+        "temperature": float(os.getenv("TEMPERATURE", 0.5)),
+        "top_p": float(os.getenv("TOP_P", 0.9)),
+        "top_k": float(os.getenv("TOP_K", 50)),
     }
+
+    print("payload", payload)
 
     body = json.dumps(payload)
     model_id = "mistral.mistral-7b-instruct-v0:2"
@@ -211,21 +214,49 @@ def store_documents_from_pdf(pdf_path):
     print("PDF document stored in ChromaDB ✅")
 
 
-def search_knowledge_base(query, top_k=3):
-    """Searches ChromaDB and returns the most relevant text chunks."""
+# def search_knowledge_base(query, top_k=3):
+#     """Searches ChromaDB and returns the most relevant text chunks."""
+#     query_embedding = model.encode([query]).tolist()
+
+#     results = collection.query(
+#         query_embeddings=query_embedding, n_results=top_k, include=["metadatas"]
+#     )
+
+#     # print(len(results['metadatas'][0]))
+
+#     retrieved_texts = (
+#         [item["text"] for item in results["metadatas"][0]]
+#         if results["metadatas"]
+#         else []
+#     )
+
+#     return "\n".join(retrieved_texts) if retrieved_texts else None
+
+
+def search_knowledge_base(query, top_k=3, score_threshold=0.5):
+    """Searches ChromaDB and returns the most relevant text chunks.
+    If the ranking score is too low, return 'Not found' or None.
+    """
     query_embedding = model.encode([query]).tolist()
 
     results = collection.query(
-        query_embeddings=query_embedding, n_results=top_k, include=["metadatas"]
+        query_embeddings=query_embedding,
+        n_results=top_k,
+        include=["metadatas", "distances"],
     )
 
-    # print(len(results['metadatas'][0]))
+    if not results["metadatas"] or not results["distances"]:
+        return None
 
-    retrieved_texts = (
-        [item["text"] for item in results["metadatas"][0]]
-        if results["metadatas"]
-        else []
-    )
+    # Get the highest-ranked result's score (assuming lower distance = better match)
+    best_score = results["distances"][0][0] if results["distances"][0] else float("inf")
+
+    # If the score is too low (high distance), return "Not found"
+    if best_score > score_threshold:
+        return None
+
+    # Extract the relevant texts
+    retrieved_texts = [item["text"] for item in results["metadatas"][0]]
 
     return "\n".join(retrieved_texts) if retrieved_texts else None
 
@@ -289,7 +320,6 @@ app = FastAPI()
 
 class QueryRequest(BaseModel):
     query: str
-
 
 
 async def process_document(file: UploadFile) -> Dict:
@@ -411,7 +441,6 @@ async def search_knowledge(request: QueryRequest):
 processed_messages = set()
 
 
-
 @app.get("/")
 def home():
     return {"message": "WhatsApp Webhook Running!..."}
@@ -428,7 +457,6 @@ def home():
 #     else:
 #         print("Webhook verification failed.")
 #         raise HTTPException(status_code=403, detail="Forbidden")
-
 
 
 @app.get("/webhook")
@@ -473,7 +501,13 @@ async def webhook(request: Request):
                 print("body_param:", body_param)
                 print({"from": from_})
                 print({"msg_body": msg_body})
-                answer = search_user_query(msg_body)
+
+                answer = ""
+
+                if search_user_query(msg_body) == "None":
+                    answer = search_user_query(msg_body)
+                else:
+                    answer = "Sorry i am not able to answer your query"
 
                 # Making the API call to WhatsApp Business API
                 url = f"https://graph.facebook.com/v21.0/{phon_no_id}/messages?access_token={access_token}"

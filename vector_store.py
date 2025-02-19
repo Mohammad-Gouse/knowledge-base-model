@@ -12,7 +12,7 @@ def chunk_text(text, chunk_size=500, overlap=100):
     chunks = []
     words = text.split()  # Split by words to avoid breaking words
     for i in range(0, len(words), chunk_size - overlap):
-        chunk = " ".join(words[i:i + chunk_size])
+        chunk = " ".join(words[i : i + chunk_size])
         chunks.append(chunk)
     return chunks
 
@@ -29,12 +29,11 @@ def store_documents_from_word(doc_path):
             embedding = model.encode(chunk).tolist()
             chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
             collection.add(
-                ids=[chunk_id],
-                embeddings=[embedding],
-                metadatas=[{"text": chunk}]
+                ids=[chunk_id], embeddings=[embedding], metadatas=[{"text": chunk}]
             )
 
     print("Word document stored in ChromaDB ✅")
+
 
 def store_documents_from_pdf(pdf_path):
     """Extracts text from pdf docs, chunks it, converts to vectors, and stores in ChromaDB."""
@@ -47,26 +46,52 @@ def store_documents_from_pdf(pdf_path):
             embedding = model.encode(chunk).tolist()
             chunk_id = f"{doc['id']}_{idx}"  # Unique ID for each chunk
             collection.add(
-                ids=[chunk_id],
-                embeddings=[embedding],
-                metadatas=[{"text": chunk}]
+                ids=[chunk_id], embeddings=[embedding], metadatas=[{"text": chunk}]
             )
 
     print("PDF document stored in ChromaDB ✅")
 
-def search_knowledge_base(query, top_k=3):
-    """Searches ChromaDB and returns the most relevant text chunks."""
+
+# def search_knowledge_base(query, top_k=3):
+#     """Searches ChromaDB and returns the most relevant text chunks."""
+#     query_embedding = model.encode([query]).tolist()
+
+#     results = collection.query(
+#         query_embeddings=query_embedding,
+#         n_results=top_k,
+#         include=["metadatas"]
+#     )
+
+#     # print(len(results['metadatas'][0]))
+
+#     retrieved_texts = [item["text"] for item in results["metadatas"][0]] if results["metadatas"] else []
+
+#     return "\n".join(retrieved_texts) if retrieved_texts else None
+
+
+def search_knowledge_base(query, top_k=3, score_threshold=0.5):
+    """Searches ChromaDB and returns the most relevant text chunks.
+    If the ranking score is too low, return 'Not found' or None.
+    """
     query_embedding = model.encode([query]).tolist()
 
     results = collection.query(
         query_embeddings=query_embedding,
         n_results=top_k,
-        include=["metadatas"]
+        include=["metadatas", "distances"],
     )
 
-    # print(len(results['metadatas'][0]))
+    if not results["metadatas"] or not results["distances"]:
+        return None
 
-    retrieved_texts = [item["text"] for item in results["metadatas"][0]] if results["metadatas"] else []
+    # Get the highest-ranked result's score (assuming lower distance = better match)
+    best_score = results["distances"][0][0] if results["distances"][0] else float("inf")
+
+    # If the score is too low (high distance), return "Not found"
+    if best_score > score_threshold:
+        return None
+
+    # Extract the relevant texts
+    retrieved_texts = [item["text"] for item in results["metadatas"][0]]
 
     return "\n".join(retrieved_texts) if retrieved_texts else None
-
