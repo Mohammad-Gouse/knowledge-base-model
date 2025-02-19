@@ -12,7 +12,7 @@ from vector_store import search_knowledge_base
 from bedrock_client import ask_bedrock
 from pydantic import BaseModel
 import uvicorn
-
+import requests
 
 # Initialize ChromaDB (Persistent storage)
 CHROMA_DB_PATH = "embeddings"
@@ -393,6 +393,119 @@ async def search_knowledge(request: QueryRequest):
 
     response = ask_bedrock(query, retrieved_text)
     return {"response": response['outputs'][0]['text']}
+
+
+# In-memory cache to track processed messages (Prevent duplicates)
+processed_messages = set()
+
+
+@app.get("/")
+def home():
+    return {"message": "WhatsApp Webhook Running!"}
+
+
+@app.get("/webhook")
+async def verify_webhook(hub_mode: str, hub_verify_token: str, hub_challenge: str):
+    """WhatsApp Webhook Verification"""
+    VERIFY_TOKEN = "my_secret_token"  # Set your verification token
+
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        print("Webhook verified successfully.")
+        return int(hub_challenge)  # WhatsApp requires plain text response
+    else:
+        print("Webhook verification failed.")
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@app.post("/webhook")
+async def receive_message(request: Request):
+    """Processes incoming messages from WhatsApp"""
+    global processed_messages
+
+    try:
+        body = await request.json()
+        print("Received Webhook:", json.dumps(body, indent=2))
+
+        # Basic validation
+        if "object" not in body:
+            raise HTTPException(status_code=400, detail="Invalid event.")
+
+        entry = body.get("entry", [{}])[0]
+        changes = entry.get("changes", [{}])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages", [{}])[0]
+
+        if not messages:
+            raise HTTPException(status_code=400, detail="No message found.")
+
+        message_id = messages.get("id")  # Unique ID
+        phone_number_id = value.get("metadata", {}).get("phone_number_id")
+        from_user = messages.get("from")
+        msg_body = messages.get("text", {}).get("body", "")
+
+        print(f"Received Message ID: {message_id}")
+
+        # **Deduplication Check**
+        if message_id in processed_messages:
+            print("⚠️ Duplicate message detected. Skipping processing.")
+            return {"message": "Message already processed."}
+
+        # **Store Message ID to Prevent Future Duplicates**
+        processed_messages.add(message_id)
+
+        # **Invoke Lambda for Response**
+        response_text = get_auto_response(msg_body, body)
+
+        # **Send Response to WhatsApp**
+        send_whatsapp_message(phone_number_id, from_user, response_text)
+
+        return {"message": "Processed successfully"}
+
+    except Exception as error:
+        print("Error handling request:", error)
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+def get_auto_response(user_message, body_param):
+    """Calls AWS Lambda to get an auto-response"""
+    try:
+        lambda_client = boto3.client("lambda")
+        lambda_function_name = "testFunction"
+
+        response = lambda_client.invoke(
+            FunctionName=lambda_function_name,
+            InvocationType="RequestResponse",
+            Payload=json.dumps({"userMessage": user_message, "bodyParam": body_param}),
+        )
+
+        lambda_response = json.loads(response["Payload"].read())
+        return lambda_response.get("body", "Sorry, I didn't understand your request.")
+    except Exception as e:
+        print("Error calling Lambda:", e)
+        return "Sorry, something went wrong."
+
+
+def send_whatsapp_message(phone_number_id, to, message):
+    """Sends message via WhatsApp API"""
+    # whatsapp_token = os.getenv("WHATSAPP_TOKEN")
+    whatsapp_token = "EAAWA3MqEIZBMBO2jAXsVW1fWrBq6o0NZBjybzl6nGYnwl9VkEbRa3MWIQgQjFqZBwJRtkdUOt0Bq2V4ADQzT1RotjM24xTNiAzlartIlH2ftPkKqNf57b3oyfl5aBhRiGhzZBNbiBCIhOKZAZAbJXz6K0ao9D3rLWPvKgvIkZBHKvKvsSWESKK3z5hDFUdMJPnZAUa09EswpBqNKvZBcuzo9QklRUXQZB2DriZBf5myRUGx"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {whatsapp_token}",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "text": {"body": message},
+    }
+    whatsapp_api_url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
+
+    try:
+        response = requests.post(whatsapp_api_url, json=payload, headers=headers)
+        print("WhatsApp API Response:", response.json())
+    except Exception as e:
+        print("Error sending message:", e)
 
 
 if __name__ == "__main__":
