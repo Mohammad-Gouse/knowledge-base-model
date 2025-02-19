@@ -53,7 +53,7 @@ def store_documents():
 
 def main():
     store_documents()
-    search_user_query()
+    # search_user_query()
 
 
 if __name__ == "__main__":

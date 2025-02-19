@@ -7,12 +7,16 @@ import pdf2image
 import pytesseract
 from PIL import Image
 from sentence_transformers import SentenceTransformer
-from fastapi import FastAPI
 from vector_store import search_knowledge_base
 from bedrock_client import ask_bedrock
 from pydantic import BaseModel
 import uvicorn
 import requests
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from typing import Dict, Optional, List
+import httpx
+from dotenv import load_dotenv
+
 
 # Initialize ChromaDB (Persistent storage)
 CHROMA_DB_PATH = "embeddings"
@@ -20,7 +24,11 @@ client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 collection = client.get_or_create_collection(name="knowledge_base")
 
 # Initialize Amazon Bedrock Client
-AWS_REGION = "ap-south-1"
+load_dotenv()
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+MY_TOKEN = os.getenv("VERIFY_TOKEN")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+
 bedrock_runtime = boto3.client(service_name="bedrock-runtime", region_name=AWS_REGION)
 
 
@@ -283,9 +291,6 @@ class QueryRequest(BaseModel):
     query: str
 
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from typing import Dict, Optional, List
-
 
 async def process_document(file: UploadFile) -> Dict:
     """Process uploaded document and store in ChromaDB."""
@@ -404,7 +409,7 @@ async def search_knowledge(request: QueryRequest):
 
 # In-memory cache to track processed messages (Prevent duplicates)
 processed_messages = set()
-import httpx
+
 
 
 @app.get("/")
@@ -424,7 +429,6 @@ def home():
 #         print("Webhook verification failed.")
 #         raise HTTPException(status_code=403, detail="Forbidden")
 
-MY_TOKEN = "jyoti"  # Replace with your actual token
 
 
 @app.get("/webhook")
@@ -433,10 +437,6 @@ async def webhook(request: Request):
     mode = query_params.get("hub.mode")
     challenge = query_params.get("hub.challenge")
     token = query_params.get("hub.verify_token")
-
-    print(token)
-    print(mode)
-    print(challenge)
 
     if mode and token:
         if mode == "subscribe" and token == MY_TOKEN:
@@ -451,7 +451,7 @@ async def webhook(request: Request):
 @app.post("/webhook")
 async def webhook(request: Request):
     body_param = await request.json()
-    access_token = "EAAWA3MqEIZBMBO2jAXsVW1fWrBq6o0NZBjybzl6nGYnwl9VkEbRa3MWIQgQjFqZBwJRtkdUOt0Bq2V4ADQzT1RotjM24xTNiAzlartIlH2ftPkKqNf57b3oyfl5aBhRiGhzZBNbiBCIhOKZAZAbJXz6K0ao9D3rLWPvKgvIkZBHKvKvsSWESKK3z5hDFUdMJPnZAUa09EswpBqNKvZBcuzo9QklRUXQZB2DriZBf5myRUGx"
+    access_token = ACCESS_TOKEN
 
     if body_param.get("object"):
         try:
