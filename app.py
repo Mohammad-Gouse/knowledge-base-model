@@ -53,7 +53,7 @@ def ask_bedrock(query, context):
         "top_k": float(os.getenv("TOP_K", 50)),
     }
 
-    print("payload", payload)
+    # print("payload", payload)
 
     body = json.dumps(payload)
     model_id = "mistral.mistral-7b-instruct-v0:2"
@@ -233,7 +233,9 @@ def store_documents_from_pdf(pdf_path):
 #     return "\n".join(retrieved_texts) if retrieved_texts else None
 
 
-def search_knowledge_base(query, top_k=3, score_threshold=0.5):
+def search_knowledge_base(query, top_k=2, score_threshold=1.9):
+    print(top_k)
+    print(score_threshold)
     """Searches ChromaDB and returns the most relevant text chunks.
     If the ranking score is too low, return 'Not found' or None.
     """
@@ -252,6 +254,7 @@ def search_knowledge_base(query, top_k=3, score_threshold=0.5):
     best_score = results["distances"][0][0] if results["distances"][0] else float("inf")
 
     # If the score is too low (high distance), return "Not found"
+    print(best_score, score_threshold)
     if best_score > score_threshold:
         return None
 
@@ -305,7 +308,16 @@ def search_user_query(query):
     #         print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
     #     else:
     #         print("No relevant data found.")
-    retrieved_text = search_knowledge_base(query)
+    threshold = float(os.getenv("THRESHOLD"))
+    num_chunks = int(os.getenv("CHUNKS"))
+    print("threshold", threshold)
+    print("num_chunks", num_chunks)
+    retrieved_text = search_knowledge_base(
+        query, top_k=num_chunks, score_threshold=threshold
+    )
+
+    # retrieved_text = search_knowledge_base(query)
+
     if retrieved_text:
         response = ask_bedrock(query, retrieved_text)
         print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
@@ -428,7 +440,13 @@ async def upload_document(file: UploadFile = File(...)):
 async def search_knowledge(request: QueryRequest):
     """API to query the knowledge base and get responses."""
     query = request.query
-    retrieved_text = search_knowledge_base(query)
+    threshold = float(os.getenv("THRESHOLD"))
+    num_chunks = int(os.getenv("CHUNKS"))
+    print("threshold", threshold)
+    print("num_chunks", num_chunks)
+    retrieved_text = search_knowledge_base(
+        query, top_k=num_chunks, score_threshold=threshold
+    )
 
     if not retrieved_text:
         return {"response": "No relevant data found"}
@@ -504,7 +522,7 @@ async def webhook(request: Request):
 
                 answer = ""
 
-                if search_user_query(msg_body) == "None":
+                if search_user_query(msg_body) is not None:
                     answer = search_user_query(msg_body)
                 else:
                     answer = "Sorry i am not able to answer your query"
