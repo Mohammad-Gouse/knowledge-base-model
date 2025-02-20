@@ -7,9 +7,6 @@ import pdf2image
 import pytesseract
 from PIL import Image
 from sentence_transformers import SentenceTransformer
-
-# from vector_store import search_knowledge_base
-from bedrock_client import ask_bedrock
 from pydantic import BaseModel
 import uvicorn
 import requests
@@ -32,6 +29,10 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
 bedrock_runtime = boto3.client(service_name="bedrock-runtime", region_name=AWS_REGION)
 
+# Load the embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
 
 def ask_bedrock(query, context):
     """Uses Amazon Bedrock to generate an answer based on retrieved knowledge"""
@@ -52,8 +53,6 @@ def ask_bedrock(query, context):
         "top_p": float(os.getenv("TOP_P", 0.9)),
         "top_k": float(os.getenv("TOP_K", 50)),
     }
-
-    # print("payload", payload)
 
     body = json.dumps(payload)
     model_id = "mistral.mistral-7b-instruct-v0:2"
@@ -95,7 +94,6 @@ def extract_text_from_pdf(pdf_path, output_txt_path):
     """
     try:
         # Convert PDF to images
-        # print("Converting PDF to images...")
         pages = pdf2image.convert_from_path(pdf_path)
 
         # Create output directory if it doesn't exist
@@ -165,8 +163,6 @@ def load_pdf_documents(folder_path):
     return documents
 
 
-# Load the embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def chunk_text(text, chunk_size=500, overlap=100):
@@ -214,28 +210,7 @@ def store_documents_from_pdf(pdf_path):
     print("PDF document stored in ChromaDB ✅")
 
 
-# def search_knowledge_base(query, top_k=3):
-#     """Searches ChromaDB and returns the most relevant text chunks."""
-#     query_embedding = model.encode([query]).tolist()
-
-#     results = collection.query(
-#         query_embeddings=query_embedding, n_results=top_k, include=["metadatas"]
-#     )
-
-#     # print(len(results['metadatas'][0]))
-
-#     retrieved_texts = (
-#         [item["text"] for item in results["metadatas"][0]]
-#         if results["metadatas"]
-#         else []
-#     )
-
-#     return "\n".join(retrieved_texts) if retrieved_texts else None
-
-
 def search_knowledge_base(query, top_k=2, score_threshold=1.9):
-    print(top_k)
-    print(score_threshold)
     """Searches ChromaDB and returns the most relevant text chunks.
     If the ranking score is too low, return 'Not found' or None.
     """
@@ -254,7 +229,6 @@ def search_knowledge_base(query, top_k=2, score_threshold=1.9):
     best_score = results["distances"][0][0] if results["distances"][0] else float("inf")
 
     # If the score is too low (high distance), return "Not found"
-    print(best_score, score_threshold)
     if best_score > score_threshold:
         return None
 
@@ -264,31 +238,31 @@ def search_knowledge_base(query, top_k=2, score_threshold=1.9):
     return "\n".join(retrieved_texts) if retrieved_texts else None
 
 
-def store_by_document_type():
-    doc_path = "docs/"
-    pdf_path = "pdfs/"
-    doc_type = input("Enter Document type PDF or Word? [P/W]:")
-    if doc_type.lower() == "w" or doc_type.lower() == "word":
-        store_documents_from_word(doc_path)
-    elif doc_type.lower() == "p" or doc_type.lower() == "pdf":
-        store_documents_from_pdf(pdf_path)
-    else:
-        try_again = input("Invalid input. Do you want to try again?[Y/N]:")
-        if try_again.lower() == "y" or try_again.lower() == "yes":
-            store_by_document_type()
-        else:
-            return
+# def store_by_document_type():
+#     doc_path = "docs/"
+#     pdf_path = "pdfs/"
+#     doc_type = input("Enter Document type PDF or Word? [P/W]:")
+#     if doc_type.lower() == "w" or doc_type.lower() == "word":
+#         store_documents_from_word(doc_path)
+#     elif doc_type.lower() == "p" or doc_type.lower() == "pdf":
+#         store_documents_from_pdf(pdf_path)
+#     else:
+#         try_again = input("Invalid input. Do you want to try again?[Y/N]:")
+#         if try_again.lower() == "y" or try_again.lower() == "yes":
+#             store_by_document_type()
+#         else:
+#             return
+#
+#     more_doc = input("Do you want to store more documents? [Y/N]:")
+#     if more_doc.lower() == "y" or more_doc.lower() == "yes":
+#         store_by_document_type()
 
-    more_doc = input("Do you want to store more documents? [Y/N]:")
-    if more_doc.lower() == "y" or more_doc.lower() == "yes":
-        store_by_document_type()
 
-
-def store_documents():
-    # Step 1: Store documents in ChromaDB
-    store_doc = input("Do you want to store documents? [Y/N]:")
-    if store_doc.lower() == "y" or store_doc.lower() == "yes":
-        store_by_document_type()
+# def store_documents():
+#     # Step 1: Store documents in ChromaDB
+#     store_doc = input("Do you want to store documents? [Y/N]:")
+#     if store_doc.lower() == "y" or store_doc.lower() == "yes":
+#         store_by_document_type()
 
 
 def search_user_query(query):
@@ -298,29 +272,14 @@ def search_user_query(query):
     # query1 = "how many Required fields that will be fetched from Caliber during integration of non functional requirements?"
     # query2 = "How to set up family trust?"
 
-    # while True:
-    #     query = input("\nEnter your query:").strip()
-    #     if query == "-1":
-    #         break
-    #     retrieved_text = search_knowledge_base(query)
-    #     if retrieved_text:
-    #         response = ask_bedrock(query, retrieved_text)
-    #         print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
-    #     else:
-    #         print("No relevant data found.")
     threshold = float(os.getenv("THRESHOLD"))
     num_chunks = int(os.getenv("CHUNKS"))
-    print("threshold", threshold)
-    print("num_chunks", num_chunks)
     retrieved_text = search_knowledge_base(
         query, top_k=num_chunks, score_threshold=threshold
     )
 
-    # retrieved_text = search_knowledge_base(query)
-
     if retrieved_text:
         response = ask_bedrock(query, retrieved_text)
-        print(f"\n\033[34m{response['outputs'][0]['text']}\033[0m")
         return response["outputs"][0]["text"]
     else:
         print("No relevant data found.")
@@ -442,8 +401,6 @@ async def search_knowledge(request: QueryRequest):
     query = request.query
     threshold = float(os.getenv("THRESHOLD"))
     num_chunks = int(os.getenv("CHUNKS"))
-    print("threshold", threshold)
-    print("num_chunks", num_chunks)
     retrieved_text = search_knowledge_base(
         query, top_k=num_chunks, score_threshold=threshold
     )
@@ -464,19 +421,6 @@ def home():
     return {"message": "WhatsApp Webhook Running!..."}
 
 
-# @app.get("/webhook")
-# async def verify_webhook(hub_mode: str, hub_verify_token: str, hub_challenge: str):
-#     """WhatsApp Webhook Verification"""
-#     VERIFY_TOKEN = "jyoti"  # Set your verification token
-
-#     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-#         print("Webhook verified successfully.")
-#         return int(hub_challenge)  # WhatsApp requires plain text response
-#     else:
-#         print("Webhook verification failed.")
-#         raise HTTPException(status_code=403, detail="Forbidden")
-
-
 @app.get("/webhook")
 async def webhook(request: Request):
     query_params = request.query_params
@@ -486,12 +430,9 @@ async def webhook(request: Request):
 
     if mode and token:
         if mode == "subscribe" and token == MY_TOKEN:
-            print("passed")
             return int(challenge)  # FastAPI automatically sets 200 status
         else:
-            print("failed")
             return {"error": "Forbidden"}, 403
-    # return {"error": "Invalid request"}, 400
 
 
 @app.post("/webhook")
@@ -515,10 +456,6 @@ async def webhook(request: Request):
                     .get("profile", {})
                     .get("name", "User")
                 )
-
-                print("body_param:", body_param)
-                print({"from": from_})
-                print({"msg_body": msg_body})
 
                 answer = ""
 
@@ -555,54 +492,6 @@ async def webhook(request: Request):
             return {"error": "An unexpected error occurred.", "details": str(e)}, 500
     return {"error": "Invalid request"}, 404
 
-
-# @app.post("/webhook")
-# async def receive_message(request: Request):
-#     """Processes incoming messages from WhatsApp"""
-#     global processed_messages
-
-#     try:
-#         body = await request.json()
-#         print("Received Webhook:", json.dumps(body, indent=2))
-
-#         # Basic validation
-#         if "object" not in body:
-#             raise HTTPException(status_code=400, detail="Invalid event.")
-
-#         entry = body.get("entry", [{}])[0]
-#         changes = entry.get("changes", [{}])[0]
-#         value = changes.get("value", {})
-#         messages = value.get("messages", [{}])[0]
-
-#         if not messages:
-#             raise HTTPException(status_code=400, detail="No message found.")
-
-#         message_id = messages.get("id")  # Unique ID
-#         phone_number_id = value.get("metadata", {}).get("phone_number_id")
-#         from_user = messages.get("from")
-#         msg_body = messages.get("text", {}).get("body", "")
-
-#         print(f"Received Message ID: {message_id}")
-
-#         # **Deduplication Check**
-#         if message_id in processed_messages:
-#             print("⚠️ Duplicate message detected. Skipping processing.")
-#             return {"message": "Message already processed."}
-
-#         # **Store Message ID to Prevent Future Duplicates**
-#         processed_messages.add(message_id)
-
-#         # **Invoke Lambda for Response**
-#         response_text = get_auto_response(msg_body, body)
-
-#         # **Send Response to WhatsApp**
-#         send_whatsapp_message(phone_number_id, from_user, response_text)
-
-#         return {"message": "Processed successfully"}
-
-#     except Exception as error:
-#         print("Error handling request:", error)
-#         raise HTTPException(status_code=500, detail=str(error))
 
 
 def get_auto_response(user_message, body_param):
