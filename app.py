@@ -536,8 +536,8 @@ def send_whatsapp_message(phone_number_id, to, message):
         print("Error sending message:", e)
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 # def lambda_handler(event, context):
