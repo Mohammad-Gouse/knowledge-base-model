@@ -13,7 +13,7 @@ import pytesseract
 import requests
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks, Query
 from PIL import Image
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
@@ -38,6 +38,7 @@ TEMPERATURE = float(os.getenv("TEMPERATURE", 0.5))
 TOP_P = float(os.getenv("TOP_P", 0.9))
 TOP_K = float(os.getenv("TOP_K", 50))
 TEMP_DIR = "/tmp"
+FILE_KEY = "allowed_numbers.json"
 
 # S3 Configuration
 S3_BUCKET = os.getenv("S3_BUCKET_NAME")  # Add this to your .env file
@@ -515,6 +516,40 @@ async def process_all_s3_documents(
     }
 
 
+class BucketRequest(BaseModel):
+    bucket_name: str
+
+class NumberRequest(BucketRequest):
+    mobile_number: str
+
+class BulkNumbersRequest(BucketRequest):
+    numbers: list[str]
+
+# Function to fetch numbers from S3
+def get_allowed_numbers(bucket_name):
+    try:
+        obj = s3_client.get_object(Bucket=bucket_name, Key=FILE_KEY)
+        data = json.loads(obj["Body"].read().decode("utf-8"))
+        return data.get("allowed_numbers", [])
+    except s3_client.exceptions.NoSuchKey:
+        return []  # If file doesn't exist, return empty list
+    except s3_client.exceptions.NoSuchBucket:
+        raise HTTPException(status_code=404, detail="Bucket not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching data: {str(e)}")
+
+# Function to update S3 file
+def update_allowed_numbers(bucket_name, numbers):
+    try:
+        data = json.dumps({"allowed_numbers": numbers})
+        s3_client.put_object(Bucket=bucket_name, Key=FILE_KEY, Body=data, ContentType="application/json")
+    except s3_client.exceptions.NoSuchBucket:
+        raise HTTPException(status_code=404, detail="Bucket not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating data: {str(e)}")
+
+
+
 # FastAPI application
 app = FastAPI(title="Document Retrieval System")
 
@@ -649,29 +684,47 @@ async def webhook_handler(request: Request):
     """
     try:
         body_param = await request.json()
-        
         if not body_param.get("object"):
             raise HTTPException(status_code=404, detail="Invalid request")
-            
+
         try:
-            entry = body_param.get("entry", [])[0]
-            changes = entry.get("changes", [])[0]
+            entry = body_param.get("entry", [])
+            if not entry:
+                print("No entries found in webhook payload.")
+                return {"status": "No new entries"}
+            entry = entry[0]
+
+            changes = entry.get("changes", [])
+            if not changes:
+                print("No changes found in webhook payload.")
+                return {"status": "No new changes"}
+            changes = changes[0]
+
             value = changes.get("value", {})
             messages = value.get("messages", [])
-            
             if not messages:
                 return {"status": "No new messages"}
-                
+            
+            statuses = value.get("statuses", [])
             phone_number_id = value["metadata"]["phone_number_id"]
             sender = messages[0]["from"]
             message_text = messages[0]["text"]["body"]
             user_name = value.get("contacts", [{}])[0].get("profile", {}).get("name", "User")
-            
-            # Process the message
-            answer = search_user_query(message_text)
-            if answer is None:
-                answer = "Sorry, I am not able to answer your query."
-            
+
+            # Check if sender is authorized
+            BUCKET = os.getenv("S3_BUCKET_MOBILE", "ep-mobile-numbers")
+            ALLOW_MOBILE = get_allowed_numbers(BUCKET)
+            print("ALLOW_MOBILE list: ", ALLOW_MOBILE)
+            if sender not in ALLOW_MOBILE:
+                answer = "Sorry, You are not authorized"
+            else:
+                # Process the message for authorized users
+                query_answer = search_user_query(message_text)
+                if query_answer is not None:
+                    answer = query_answer
+                else:
+                    answer = "Sorry, I am not able to answer your query."
+
             # Send response via WhatsApp API
             url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages?access_token={ACCESS_TOKEN}"
             payload = {
@@ -682,10 +735,10 @@ async def webhook_handler(request: Request):
                 "text": {"body": answer}
             }
             headers = {"Content-Type": "application/json"}
-            
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, headers=headers)
-                
+
                 if response.status_code == 200:
                     print("Message sent successfully:", response.json())
                     return {"message": "Message sent successfully"}
@@ -698,20 +751,186 @@ async def webhook_handler(request: Request):
                             "details": response.json()
                         }
                     )
-                    
+
         except Exception as e:
             print(f"Error processing webhook: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"An error occurred while processing the webhook: {str(e)}"
             )
-            
+
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"An unexpected error occurred: {str(e)}"
         )
+
+# @app.post("/webhook")
+# async def webhook_handler(request: Request):
+#     """
+#     Handle incoming WhatsApp messages.
+#     This endpoint receives message notifications from WhatsApp.
+#     """
+#     try:
+#         body_param = await request.json()
+#         if not body_param.get("object"):
+#             raise HTTPException(status_code=404, detail="Invalid request")
+
+#         try:
+#             entry = body_param.get("entry", [])
+#             if not entry:
+#                 print("No entries found in webhook payload.")
+#                 return {"status": "No new entries"}
+#             entry = entry[0]
+
+#             changes = entry.get("changes", [])
+#             if not changes:
+#               print("No changes found in webhook payload.")
+#               return {"status": "No new changes"}
+#             changes = changes[0]
+
+#             value = changes.get("value", {})
+#             messages = value.get("messages", [])
+#             if not messages:
+#                 return {"status": "No new messages"}
+            
+#             statuses = value.get("statuses", [])
+#             phone_number_id = value["metadata"]["phone_number_id"]
+#             sender = messages[0]["from"]
+#             message_text = messages[0]["text"]["body"]
+#             user_name = value.get("contacts", [{}])[0].get("profile", {}).get("name", "User")
+
+#             if statuses:
+#               # only process status if they exist
+#                 statuses = statuses[0]
+#                 recipient_id = statuses.get("recipient_id")
+
+#                 if recipient_id in ALLOW_MOBILE:
+#                     # Process the message
+#                     answer = search_user_query(message_text)
+#                     if answer is None:
+#                         answer = "Sorry, I am not able to answer your query."
+#                 else:
+#                     answer = "Sorry, You are not authorized"
+
+
+#             # Send response via WhatsApp API
+#             url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages?access_token={ACCESS_TOKEN}"
+#             payload = {
+#                 "messaging_product": "whatsapp",
+#                 "recipient_type": "individual",
+#                 "to": sender,  # Using the sender's number for reply
+#                 "type": "text",
+#                 "text": {"body": answer}
+#             }
+#             headers = {"Content-Type": "application/json"}
+
+#             async with httpx.AsyncClient() as client:
+#                 response = await client.post(url, json=payload, headers=headers)
+
+#                 if response.status_code == 200:
+#                     print("Message sent successfully:", response.json())
+#                     return {"message": "Message sent successfully"}
+#                 else:
+#                     print("Error sending message:", response.json())
+#                     raise HTTPException(
+#                         status_code=400,
+#                         detail={
+#                             "error": "Failed to send message",
+#                             "details": response.json()
+#                         }
+#                     )
+
+#         except Exception as e:
+#             print(f"Error processing webhook: {str(e)}")
+#             raise HTTPException(
+#                 status_code=500,
+#                 detail=f"An error occurred while processing the webhook: {str(e)}"
+#             )
+
+#     except Exception as e:
+#         print(f"Unexpected error: {str(e)}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"An unexpected error occurred: {str(e)}"
+#         )
+
+# @app.post("/webhook")
+# async def webhook_handler(request: Request):
+#     """
+#     Handle incoming WhatsApp messages.
+#     This endpoint receives message notifications from WhatsApp.
+#     """
+#     try:
+#         body_param = await request.json()
+        
+#         if not body_param.get("object"):
+#             raise HTTPException(status_code=404, detail="Invalid request")
+            
+#         try:
+#             entry = body_param.get("entry", [])[0]
+#             changes = entry.get("changes", [])[0]
+#             value = changes.get("value", {})
+#             messages = value.get("messages", [])
+#             # statuses = value.get("statuses", [])[0]
+#             # print(statuses)
+#             # recipient_id = statuses[0]["recipient_id"]
+#             # print(recipient_id)
+            
+#             if not messages:
+#                 return {"status": "No new messages"}
+                
+#             phone_number_id = value["metadata"]["phone_number_id"]
+#             sender = messages[0]["from"]
+#             message_text = messages[0]["text"]["body"]
+#             user_name = value.get("contacts", [{}])[0].get("profile", {}).get("name", "User")
+            
+#             # Process the message
+#             answer = search_user_query(message_text)
+#             if answer is None:
+#                 answer = "Sorry, I am not able to answer your query."
+            
+#             # Send response via WhatsApp API
+#             url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages?access_token={ACCESS_TOKEN}"
+#             payload = {
+#                 "messaging_product": "whatsapp",
+#                 "recipient_type": "individual",
+#                 "to": sender,  # Using the sender's number for reply
+#                 "type": "text",
+#                 "text": {"body": answer}
+#             }
+#             headers = {"Content-Type": "application/json"}
+            
+#             async with httpx.AsyncClient() as client:
+#                 response = await client.post(url, json=payload, headers=headers)
+                
+#                 if response.status_code == 200:
+#                     print("Message sent successfully:", response.json())
+#                     return {"message": "Message sent successfully"}
+#                 else:
+#                     print("Error sending message:", response.json())
+#                     raise HTTPException(
+#                         status_code=400,
+#                         detail={
+#                             "error": "Failed to send message",
+#                             "details": response.json()
+#                         }
+#                     )
+                    
+#         except Exception as e:
+#             print(f"Error processing webhook: {str(e)}")
+#             raise HTTPException(
+#                 status_code=500,
+#                 detail=f"An error occurred while processing the webhook: {str(e)}"
+#             )
+            
+#     except Exception as e:
+#         print(f"Unexpected error: {str(e)}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"An unexpected error occurred: {str(e)}"
+#         )
 
 
 @app.post("/upload")
@@ -780,7 +999,64 @@ async def search_endpoint(request: QueryRequest):
     return {"response": response_text}
 
 
+@app.post("/numbers/list")
+def get_numbers(request: BucketRequest):
+    numbers = get_allowed_numbers(request.bucket_name)
+    return {"allowed_numbers": numbers}
 
+# 2️⃣ **Add a Single Mobile Number**
+@app.post("/numbers/add")
+def add_number(request: NumberRequest):
+    numbers = get_allowed_numbers(request.bucket_name)
+    
+    if request.mobile_number in numbers:
+        raise HTTPException(status_code=400, detail="Number already exists")
+    
+    numbers.append(request.mobile_number)
+    update_allowed_numbers(request.bucket_name, numbers)
+    
+    return {"message": "Number added successfully", "added_number": request.mobile_number}
+
+# 3️⃣ **Add Multiple Numbers**
+@app.post("/numbers/bulk_add")
+def add_bulk_numbers(request: BulkNumbersRequest):
+    numbers = get_allowed_numbers(request.bucket_name)
+    new_numbers = set(request.numbers) - set(numbers)  # Avoid duplicates
+
+    if not new_numbers:
+        raise HTTPException(status_code=400, detail="All numbers already exist")
+
+    numbers.extend(new_numbers)
+    update_allowed_numbers(request.bucket_name, numbers)
+    
+    return {"message": "Numbers added successfully", "added_numbers": list(new_numbers)}
+
+# 4️⃣ **Delete a Single Mobile Number**
+@app.post("/numbers/delete")
+def delete_number(request: NumberRequest):
+    numbers = get_allowed_numbers(request.bucket_name)
+
+    if request.mobile_number not in numbers:
+        raise HTTPException(status_code=404, detail="Number not found")
+
+    numbers.remove(request.mobile_number)
+    update_allowed_numbers(request.bucket_name, numbers)
+    
+    return {"message": "Number deleted successfully", "deleted_number": request.mobile_number}
+
+# 5️⃣ **Delete Multiple Numbers**
+@app.post("/numbers/bulk_delete")
+def delete_bulk_numbers(request: BulkNumbersRequest):
+    numbers = get_allowed_numbers(request.bucket_name)
+    removed_numbers = [num for num in request.numbers if num in numbers]
+
+    if not removed_numbers:
+        raise HTTPException(status_code=404, detail="No numbers found to delete")
+
+    numbers = [num for num in numbers if num not in removed_numbers]
+    update_allowed_numbers(request.bucket_name, numbers)
+
+    return {"message": "Numbers deleted successfully", "deleted_numbers": removed_numbers}
 
 # Lambda handler for AWS deployment
 # def lambda_handler(event, context):
