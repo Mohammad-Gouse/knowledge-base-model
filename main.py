@@ -28,8 +28,9 @@ load_dotenv()
 
 # Constants
 CHROMA_DB_PATH = "/data/chromadb"
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 MY_TOKEN = os.getenv("VERIFY_TOKEN")
+AWS_MODEL = os.getenv("AWS_MODEL", "mistral-7b")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 THRESHOLD = float(os.getenv("THRESHOLD", "1.9"))
 NUM_CHUNKS = int(os.getenv("CHUNKS", "2"))
@@ -231,8 +232,15 @@ def search_knowledge_base(query: str, top_k: int = 2, score_threshold: float = 1
     
     # Extract the relevant texts
     retrieved_texts = [item["text"] for item in results["metadatas"][0]]
+    combine_retrieved_texts = "\n".join(retrieved_texts) if retrieved_texts else None
+    data = {
+        "retrieved_text":combine_retrieved_texts,
+        "metadatas":results["metadatas"][0],
+        "distances":results["distances"][0]
+    }
+
     
-    return "\n".join(retrieved_texts) if retrieved_texts else None
+    return data
 
 
 # LLM interaction
@@ -276,6 +284,60 @@ def ask_bedrock(query: str, context: str) -> Dict:
     
     return json.loads(response.get("body").read())
 
+def ask_bedrock_model(query: str, context: str, model: str = "mistral") -> Dict:
+    """
+    Use Amazon Bedrock to generate an answer based on retrieved knowledge.
+    
+    Args:
+        query: User's question
+        context: Retrieved context from knowledge base
+        model: Model to use ('mistral' or 'nova-lite')
+        
+    Returns:
+        Bedrock LLM response
+    """
+    prompt_data = (
+        "You are an intelligent and friendly assistant. Answer the following question "
+        "in a conversational and natural tone based on the provided knowledge. "
+        "Keep your response engaging and easy to understand.\n\n"
+        "Context:\n"
+        f"{context}\n\n"
+        f"User question: {query}\n"
+    )
+
+    payload = {
+        "prompt": "<s>[INST]" + prompt_data + "[/INST]",
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "top_k": TOP_K
+    }
+    
+    body = json.dumps(payload)
+    
+    if model.lower() == "mistral-7b":
+        # Mistral 7b model request format
+        model_id = "mistral.mistral-7b-instruct-v0:2"
+    
+    elif model.lower() == "mistral-large":
+        # mistral large model request format
+        model_id = "mistral.mistral-large-2402-v1:0"
+    
+    else:
+        raise ValueError("Model must be either 'mistral-7b' or 'mistral-large'")
+    
+    print(f"Using model: {model_id}")
+    print(f"AWS_REGION: {AWS_REGION}")
+    
+    response = bedrock_runtime.invoke_model(
+        modelId=model_id,
+        contentType="application/json",
+        accept="application/json",
+        body=body
+    )
+    
+    response_body = json.loads(response.get("body").read())
+    return response_body
 
 def search_user_query(query: str) -> Optional[str]:
     """
@@ -287,15 +349,37 @@ def search_user_query(query: str) -> Optional[str]:
     Returns:
         Generated answer or None if no relevant information found
     """
-    retrieved_text = search_knowledge_base(
+    # retrieved_text = search_knowledge_base(
+    #     query, 
+    #     top_k=NUM_CHUNKS, 
+    #     score_threshold=THRESHOLD
+    # )
+
+    metadatas = search_knowledge_base(
         query, 
         top_k=NUM_CHUNKS, 
         score_threshold=THRESHOLD
     )
     
-    if retrieved_text:
-        response = ask_bedrock(query, retrieved_text)
-        return response["outputs"][0]["text"]
+    if metadatas["retrieved_text"]:
+        response = ask_bedrock_model(query, metadatas["retrieved_text"], AWS_MODEL)
+        data = {
+            "req_query_metadata":{
+                "kb_model_top_chunks":NUM_CHUNKS,
+                "kb_model_score_threshold":THRESHOLD,
+                "aws_model_top_k":TOP_K,
+                "aws_model_top_p":TOP_P,
+                "aws_model_temperature":TEMPERATURE,
+                "aws_model_max_tokens":MAX_TOKENS,
+                
+            },
+            "query":query,
+            "model_response":response["outputs"][0]["text"],
+            "context":metadatas["retrieved_text"],
+            "metadatas":metadatas["metadatas"],
+            "distances":metadatas["distances"]
+        }
+        return data
     else:
         print("No relevant data found.")
         return None
@@ -714,12 +798,12 @@ async def webhook_handler(request: Request):
             # Check if sender is authorized
             BUCKET = os.getenv("S3_BUCKET_MOBILE", "ep-mobile-numbers")
             ALLOW_MOBILE = get_allowed_numbers(BUCKET)
-            print("ALLOW_MOBILE list: ", ALLOW_MOBILE)
             if sender not in ALLOW_MOBILE:
                 answer = "Sorry, You are not authorized"
             else:
                 # Process the message for authorized users
-                query_answer = search_user_query(message_text)
+                data = search_user_query(message_text)
+                query_answer = data["model_response"]
                 if query_answer is not None:
                     answer = query_answer
                 else:
@@ -991,12 +1075,12 @@ async def search_endpoint(request: QueryRequest):
     Returns a response generated by the LLM based on retrieved content.
     """
     query = request.query
-    response_text = search_user_query(query)
+    data = search_user_query(query)
     
-    if not response_text:
+    if not data["model_response"]:
         return {"response": "No relevant data found"}
         
-    return {"response": response_text}
+    return {"response": data}
 
 
 @app.post("/numbers/list")
